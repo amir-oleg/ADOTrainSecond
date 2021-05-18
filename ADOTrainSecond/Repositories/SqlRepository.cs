@@ -12,8 +12,14 @@ namespace ADOTrainSecond.Repositories
         private const string GetOrdersQuery = "Select * From Orders";
         private const string GetOrderProcedure = "GetOrder";
         private const string CustOrdersDetailProcedure = "CustOrdersDetail";
-        private const string CreateNewOrderQuery = "Insert into Orders (CustomerID, EmployeeID, RequiredDate) Values ";
-
+        private const string CreateNewOrderQuery = "Insert into Orders (CustomerID, EmployeeID, OrderDate, RequiredDate, ShippedDate, ShipVia, Freight, ShipName, ShipAddress, ShipCity, ShipRegion, ShipPostalCode, ShipCountry) " +
+                                                                        "Values @customerId, @employeeId, @orderDate, @requiredDate, @shippedDate, @shipVia, @freight, @shipName, @shipAddress, @shipCity, @shipRegion, @shipPostalCode, @shipCountry";
+        private const string UpdateOrderQuery = "Update Orders Set CustomerID = @customerId, EmployeeID = @employeeId, RequiredDate = @requiredDate, ShipVia = @shipVia, Freight = @freight, ShipName = @shipName, ShipAddress = @shipAddress, ShipCity = @shipCity, ShipRegion = @shipRegion, ShipPostalCode = @shipPostalCode, ShipCountry = @shipCountry Where OrderId = @orderId";
+        private const string GetOrderByIdQuery = "Select * From Orders Where OrderId = @orderId";
+        private const string DeleteNewAndInWorkOrdersQuery = "Delete From Orders Where OrderDate = null or ShippedDate = null";
+        private const string UpdateOrderDateQuery = "Update Orders Set OrderDate = @orderDate Where OrderId = @orderId";
+        private const string UpdateShippedDateQuery = "Update Orders Set ShippedDate = @shippedDate Where OrderId = @orderId";
+        private const string CustOrderHistStoredProcedure = "CustOrderHist";
         protected override T GetConnection<T>(Func<IDbConnection, T> getData, string providerInvariantName = default, string connectionString = default)
         {
             providerInvariantName = Properties.Resource.NorthwindProviderName;
@@ -99,16 +105,20 @@ namespace ADOTrainSecond.Repositories
             {
                 var order = new Order();
 
-                using (var command = CreateCommand<SqlCommand>(con, GetOrderProcedure, commandType:CommandType.StoredProcedure))
+                using (var command =
+                    CreateCommand<SqlCommand>(con, GetOrderProcedure, commandType: CommandType.StoredProcedure))
                 {
-                    CreateSqlParameter(command, "@OrderId", SqlDbType.Int, direction: ParameterDirection.Input, value: orderId);
+                    CreateSqlParameter(command, "@OrderId", SqlDbType.Int, direction: ParameterDirection.Input,
+                        value: orderId);
                     using (var reader = command.ExecuteReader())
                     {
                         if (reader.Read())
                         {
-                            if (!(reader[0] is int ordId) || !(reader[2] is int employeeId) || !(reader[6] is int shipVia) || !(reader[7] is decimal freight))
+                            if (!(reader[0] is int ordId) || !(reader[2] is int employeeId) ||
+                                !(reader[6] is int shipVia) || !(reader[7] is decimal freight))
                             {
-                                throw new ArgumentException($"SqlTypes doesn't match with CLR types.\nStoredProcedure: {GetOrderProcedure}");
+                                throw new ArgumentException(
+                                    $"SqlTypes doesn't match with CLR types.\nStoredProcedure: {GetOrderProcedure}");
                             }
 
                             order = new Order
@@ -129,13 +139,236 @@ namespace ADOTrainSecond.Repositories
                                 ShipCountry = reader[13].ToString()
                             };
                         }
+
                         reader.Close();
                     }
                 }
 
-                using (var command = CreateCommand<SqlCommand>(con, CustOrdersDetailProcedure, commandType:CommandType.StoredProcedure))
+                if (order.Details == null)
                 {
-                    CreateSqlParameter(command, "@OrderId", SqlDbType.Int, direction: ParameterDirection.Input, value: orderId);
+                    order.Details = new List<OrdersDetail>();
+                }
+
+                order.Details.AddRange(GetOrderDetails(orderId));
+
+                return order;
+            });
+        }
+
+        public bool CreateNewOrder(Entities.Order order)
+        {
+            return GetConnection(con =>
+            {
+                int rowAffected;
+                using (var command = CreateCommand<SqlCommand>(con, CreateNewOrderQuery))
+                {
+                    command.Parameters.AddWithValue("@customerId", order.CustomerId);
+                    command.Parameters.AddWithValue("@employeeId", order.EmployeeId);
+                    command.Parameters.AddWithValue("@orderDate", order.OrderDate);
+                    command.Parameters.AddWithValue("@requiredDate", order.RequiredDate);
+                    command.Parameters.AddWithValue("@shippedDate", order.ShippedDate);
+                    command.Parameters.AddWithValue("@shipVia", order.ShipVia);
+                    command.Parameters.AddWithValue("@freight", order.Freight);
+                    command.Parameters.AddWithValue("@shipName", order.ShipName);
+                    command.Parameters.AddWithValue("@shipAddress", order.ShipAddress);
+                    command.Parameters.AddWithValue("@shipCity", order.ShipCity);
+                    command.Parameters.AddWithValue("@shipRegion", order.ShipRegion);
+                    command.Parameters.AddWithValue("@shipPostalCode", order.ShipPostalCode);
+                    command.Parameters.AddWithValue("@shipCountry", order.ShipCountry);
+                    rowAffected = command.ExecuteNonQuery();
+                }
+
+                return rowAffected == 1;
+            });
+        }
+
+        public Order GetOrderById(int orderId)
+        {
+            return GetConnection(con =>
+            {
+                Order ord = null;
+                using (var command = CreateCommand<SqlCommand>(con, GetOrderByIdQuery))
+                {
+                    command.Parameters.AddWithValue("@orderId", orderId);
+                    using (var reader = command.ExecuteReader())
+                    {
+                        while (reader.Read())
+                        {
+                            if (!(reader[0] is int ordId) || !(reader[2] is int employeeId) ||
+                                !(reader[6] is int shipVia) || !(reader[7] is decimal freight))
+                            {
+                                continue;
+                            }
+
+                            ord = new Order
+                            {
+                                OrderId = ordId,
+                                CustomerId = reader[1].ToString(),
+                                EmployeeId = employeeId,
+                                OrderDate = reader[3] as DateTime?,
+                                RequiredDate = reader[4] as DateTime?,
+                                ShippedDate = reader[5] as DateTime?,
+                                ShipVia = shipVia,
+                                Freight = freight,
+                                ShipName = reader[8].ToString(),
+                                ShipAddress = reader[9].ToString(),
+                                ShipCity = reader[10].ToString(),
+                                ShipRegion = reader[11].ToString(),
+                                ShipPostalCode = reader[12].ToString(),
+                                ShipCountry = reader[13].ToString()
+                            };
+
+                            if (ord.OrderDate == null)
+                            {
+                                ord.OrderState = OrderState.New;
+                            }
+                            else if (ord.ShippedDate == null)
+                            {
+                                ord.OrderState = OrderState.InWork;
+                            }
+                            else
+                            {
+                                ord.OrderState = OrderState.Done;
+                            }
+                        }
+
+                        reader.Close();
+                    }
+
+                    return ord;
+                }
+            });
+        }
+
+        public bool UpdateOrder(Entities.Order order)
+        {
+            return GetConnection(con =>
+            {
+                int rowAffected;
+                if (order.OrderId == null)
+                {
+                    return false;
+                }
+
+                var ord = GetOrderById((int) order.OrderId);
+                if (ord == null || ord.OrderState != OrderState.New)
+                {
+                    return false;
+                }
+
+                using (var command = CreateCommand<SqlCommand>(con, UpdateOrderQuery))
+                {
+                    command.Parameters.AddWithValue("@orderId", order.OrderId);
+                    command.Parameters.AddWithValue("@customerId", order.CustomerId);
+                    command.Parameters.AddWithValue("@employeeId", order.EmployeeId);
+                    command.Parameters.AddWithValue("@requiredDate", order.RequiredDate);
+                    command.Parameters.AddWithValue("@shipVia", order.ShipVia);
+                    command.Parameters.AddWithValue("@freight", order.Freight);
+                    command.Parameters.AddWithValue("@shipName", order.ShipName);
+                    command.Parameters.AddWithValue("@shipAddress", order.ShipAddress);
+                    command.Parameters.AddWithValue("@shipCity", order.ShipCity);
+                    command.Parameters.AddWithValue("@shipRegion", order.ShipRegion);
+                    command.Parameters.AddWithValue("@shipPostalCode", order.ShipPostalCode);
+                    command.Parameters.AddWithValue("@shipCountry", order.ShipCountry);
+                    rowAffected = command.ExecuteNonQuery();
+                }
+
+                return rowAffected == 1;
+            });
+        }
+
+        public bool DeleteNewAndInWorkOrders()
+        {
+            return GetConnection(con =>
+            {
+                int rowsAffected;
+                using (var command = CreateCommand<SqlCommand>(con, DeleteNewAndInWorkOrdersQuery))
+                {
+                    rowsAffected = command.ExecuteNonQuery();
+                }
+
+                return rowsAffected > 0;
+            });
+        }
+
+        public bool TransferOrderToWork(int orderId, DateTime orderDate)
+        {
+            var order = GetOrderById(orderId);
+            if (order.OrderDate != null)
+            {
+                return false;
+            }
+            return GetConnection(con =>
+            {
+                int rowAffected;
+                using (var command = CreateCommand<SqlCommand>(con, UpdateOrderDateQuery))
+                {
+                    command.Parameters.AddWithValue("@orderId", orderId);
+                    command.Parameters.AddWithValue("@orderDate", orderDate);
+                    rowAffected = command.ExecuteNonQuery();
+                }
+                return rowAffected == 1;
+            });
+        }
+
+        public bool MarkOrderAsDone(int orderId, DateTime shippedDate)
+        {
+            var order = GetOrderById(orderId);
+            if (order.ShippedDate != null)
+            {
+                return false;
+            }
+            return GetConnection(con =>
+            {
+                int rowAffected;
+                using (var command = CreateCommand<SqlCommand>(con, UpdateShippedDateQuery))
+                {
+                    command.Parameters.AddWithValue("@orderId", orderId);
+                    command.Parameters.AddWithValue("@shippedDate", shippedDate);
+                    rowAffected = command.ExecuteNonQuery();
+                }
+                return rowAffected == 1;
+            });
+        }
+
+        public List<ProductInfo> GetHistoryOfCustomerById(string customerId)
+        {
+            return GetConnection(con =>
+            {
+                var res = new List<ProductInfo>();
+                using (var command = CreateCommand<SqlCommand>(con, CustOrderHistStoredProcedure, commandType:CommandType.StoredProcedure))
+                {
+                    command.Parameters.AddWithValue("@CustomerID", customerId);
+                    using (var reader = command.ExecuteReader())
+                    {
+                        while (reader.Read())
+                        {
+                            if (!(reader[1] is int qty))
+                            {
+                                throw new ArgumentException($"SqlTypes doesn't match with CLR types.\nStoredProcedure: {CustOrderHistStoredProcedure}");
+                            }
+                            res.Add(new ProductInfo
+                            {
+                                Title = reader[0].ToString(),
+                                Qty = qty
+                            });
+                        }
+                        reader.Close();
+                    }
+
+                    return res;
+                }
+            });
+        }
+
+        public List<OrdersDetail> GetOrderDetails(int orderId)
+        {
+            return GetConnection(con =>
+            {
+                var details = new List<OrdersDetail>();
+                using (var command = CreateCommand<SqlCommand>(con, CustOrdersDetailProcedure, commandType: CommandType.StoredProcedure))
+                {
+                    command.Parameters.AddWithValue("@OrderId", orderId);
                     using (var reader = command.ExecuteReader())
                     {
                         while (reader.Read())
@@ -146,7 +379,7 @@ namespace ADOTrainSecond.Repositories
                                 throw new ArgumentException($"SqlTypes doesn't match with CLR types.\nStoredProcedure: {CustOrdersDetailProcedure}");
                             }
 
-                            order.Details.Add(new OrdersDetail
+                            details.Add(new OrdersDetail
                             {
                                 ProductName = reader[0].ToString(),
                                 UnitPrice = unitPrice,
@@ -159,33 +392,8 @@ namespace ADOTrainSecond.Repositories
                     }
                 }
 
-                return order;
+                return details;
             });
         }
-
-        public bool CreateNewOrder(string customerId, int employeeId, DateTime requiredDate)
-        {
-            return GetConnection(con =>
-            {
-                var rowAffected = 0;
-                var sb = new StringBuilder(CreateNewOrderQuery);
-                sb.Append('(');
-                sb.Append(customerId);
-                sb.Append(',');
-                sb.Append(employeeId);
-                sb.Append(',');
-                sb.Append(requiredDate);
-                sb.Append(')');
-
-                using (var command = CreateCommand<SqlCommand>(con, sb.ToString()))
-                {
-                    rowAffected = command.ExecuteNonQuery();
-                }
-
-                return rowAffected == 1;
-            });
-        }
-
-
     }
 }
